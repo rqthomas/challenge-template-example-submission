@@ -9,7 +9,8 @@ name: forecast-python
 
 on:
   # schedule:
-  #   - cron: '0 18 * * *'
+  #   - cron: '47 5 * * *'
+  #   - cron: '47 13 * * *'   # two runs a day, off the hour: see forecast.yml for why
   workflow_dispatch:
 
 # One job at a time changes forecasts/, so a new forecast's commit never races the

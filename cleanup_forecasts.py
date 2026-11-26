@@ -39,6 +39,7 @@ import datetime
 import hashlib
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -53,8 +54,16 @@ DONE = ("processed", "skipped")
 
 
 def git_blob_sha(path):
-    """The SHA git gives a file's contents (what `git hash-object` prints)."""
-    data = Path(path).read_bytes()
+    """The SHA git gives the file as committed (what `git hash-object` prints).
+
+    Asking git, not hashing the bytes, matters for a file stored with Git LFS (Hugging Face
+    does this for every .gz file): what git holds, and the challenge records, is the small LFS
+    pointer, whose SHA differs from the file's.
+    """
+    done = subprocess.run(["git", "hash-object", "--", str(path)], capture_output=True, text=True)
+    if done.returncode == 0 and done.stdout.strip():
+        return done.stdout.strip()
+    data = Path(path).read_bytes()                  # not in a git repository: hash the bytes
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 

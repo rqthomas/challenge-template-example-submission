@@ -21,7 +21,7 @@ and no key to hand over: a submission is a file you push.
 | `challenge_s3.py` | Reads a CSV from the challenge's S3 storage, with a key if the bucket is private. |
 | `check_forecast.py` | Checks a forecast file before you push it. |
 | `cleanup_forecasts.py` | Deletes forecast files the challenge has already processed. |
-| `.github/workflows/` | Optional automation: make a forecast daily (`forecast.yml` or `forecast-python.yml`) and clean up (`cleanup-forecasts.yml`). Schedules are off. |
+| `.github/workflows/` | Optional automation: make a forecast daily (`forecast.yml` or `forecast-python.yml`) and clean up (`cleanup-forecasts.yml`). Schedules are off (when on, `forecast.yml` runs twice a day at 05:47 and 13:47 UTC, so a late or dropped run still meets the date deadline in README.md). |
 
 ## Commands
 

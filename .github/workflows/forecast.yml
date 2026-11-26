@@ -5,9 +5,15 @@
 # challenge (see README.md), and the challenge's targets are published.
 name: forecast
 
+# Two runs a day, at minutes that are not 0. GitHub's free scheduler starts a run hours late
+# (4 to 12 hours is common) and sometimes drops it, and the challenge's deadline for a forecast
+# is a date (see "Timing" in README.md): a late run must still commit before midnight UTC, and the
+# second run covers a dropped one. A repeat is harmless: the same forecast writes the same file,
+# and nothing is committed when it has not changed.
 on:
   schedule:
-     - cron: '0 18 * * *'
+    - cron: '47 5 * * *'
+    - cron: '47 13 * * *'
   workflow_dispatch:
 
 # One job at a time changes forecasts/, so a new forecast's commit never races the

@@ -170,6 +170,16 @@ published at
 `<forecasts bucket>/submission_results/example_lake_model.csv` (the challenge's
 "How to forecast" page gives the address).
 
+## Submitting from Hugging Face (or GitLab, Bitbucket, Codeberg)
+
+The challenge reads any public git repository, so the repository can be on another host.
+On Hugging Face, make a dataset or model repository, put `challenge-model.yaml` at its top
+and the forecast files in `forecasts/`, and register its address
+(`https://huggingface.co/datasets/<you>/<name>`). Hugging Face stores `.gz`, `.parquet` and
+files over 10 MB with Git LFS; the challenge follows those pointers, so a `.csv.gz` works.
+Run the forecast wherever you like (a scheduled Space or job, or a GitHub Action that
+pushes to the Hub) and commit the new file; `cleanup_forecasts.py` also handles LFS files.
+
 ## Submitting from your own computer
 
 You do not need GitHub Actions to submit. If you make the forecast on your laptop, a
@@ -213,8 +223,8 @@ git push
 - **If a push is rejected** ("fetch first"), something else added a commit, such as a
   scheduled workflow or another machine. Run `git pull --rebase` and push again.
 
-The challenge picks the file up the next time it processes submissions, which it does on
-its own schedule (every few hours, once its workflow is on). To see what happened to a
+The challenge picks the file up the next time it processes submissions, which it does once a day
+(see *Timing and the deadline* below). To see what happened to a
 file, read the list the challenge publishes for your model (the same one
 `cleanup_forecasts.py` uses). It has one row per file with a `status`, and a `reason` when
 a file was rejected:
@@ -229,7 +239,7 @@ For a private bucket, set `S3_KEY` and `S3_SECRET` (a read-only key) first. A st
 the repository (see *Cleaning up forecasts the challenge already has*).
 
 To make forecasts on a schedule from your own machine, run the same commands from `cron`
-(or any scheduler), for example every day at 18:00:
+(or any scheduler), for example twice a day at 05:47 and 13:47 (see *Timing and the deadline*):
 
 ```sh
 0 18 * * *  cd /path/to/this-repository && git pull --rebase && python forecast.py && git add forecasts && git commit -m "Forecast" && git push
@@ -314,6 +324,23 @@ first) and commits the deletions; the weekly schedule in it is commented out. Th
 workflows that change `forecasts/` share one concurrency group, so a clean-up never races a
 new forecast's commit. Deleting a file only removes it from the current files: it stays in
 the repository's git history.
+
+## Timing and the deadline
+
+The challenge reads new files, builds its dashboard and scores forecasts in one daily run, which
+GitHub's free scheduler starts at an hour that varies (4 to 12 hours late is common, and some runs
+never happen). So the deadline for a forecast is a **date**, not a time of day: a forecast for
+reference date D is shown as the "latest forecast" at the challenge's update on day
+D + `settle_days` (its *Participate* page gives the number; the template challenge uses 3), so
+commit it by the **end of day D + `settle_days` − 1 (UTC)**. A later forecast is still read and
+scored; it just is not the one on those views.
+
+This example's forecast starts from the latest weather run, which is 1 to 2 days behind, so its
+reference date is a day or two before the day it is made. That is why the template challenge waits
+3 days. If you run it yourself, schedule it **twice a day, at minutes that are not 0** (the
+workflow does: 05:47 and 13:47 UTC): a run that starts hours late still commits before midnight,
+and the second covers a run GitHub dropped. A repeat is harmless, since the same forecast writes the
+same file and nothing is committed when it has not changed.
 
 ## Making a forecast every day
 
