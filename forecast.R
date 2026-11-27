@@ -9,14 +9,22 @@
 #      dynamical.org (https://dynamical.org), whose datasets anyone can read over HTTPS
 #      with no account. For the weather the lakes had, it uses the "NOAA GEFS analysis" (the
 #      model's best estimate of past weather, 3-hourly since 2000); for the weather to
-#      come, the 31 ensemble members of the latest "NOAA GEFS forecast, 35 day" run. Both
-#      are the same GEFS model, so a relationship fitted to one carries over to the other.
+#      come, the 31 ensemble members of the "NOAA GEFS forecast, 35 day" run of the day
+#      before. Both are the same GEFS model, so a relationship fitted to one carries over.
 #   2. Fit. At each lake, a linear regression of the observed water temperature on that
 #      weather (lm(water ~ air temperature)) over the past year.
 #   3. Forecast. Each GEFS member's weather goes through the regression, plus a random
 #      draw from the regression's residuals, to make one member of the water temperature
 #      forecast. The 31 members are submitted as an ensemble: the weather uncertainty comes
 #      from GEFS and the model's own uncertainty from the residuals.
+#
+# No delay. The forecast is dated today (UTC) and uses yesterday's GEFS run, so it can be
+# submitted the day it is made. GEFS runs 35 days, so yesterday's run reaches 34 days after
+# today, more than the 30 the forecast needs; the day it shares with today is dropped. If yesterday's run is not complete yet (it is
+# added to the dataset in one update a day, at about 06:45 UTC: run this after about 07:00 UTC)
+# no file is made and the script ends
+# quietly; a later run makes it. A file that already exists is never overwritten, because
+# the challenge ignores changes to a file it has read.
 #
 # Replace the "Forecast" section with your own model; keep the rest, which reads the
 # targets and the weather and writes the file in the format the challenge expects.
@@ -26,9 +34,9 @@
 # requirements.txt (pip install -r requirements.txt) for the weather.
 #
 # Environment variables (all optional)
-#   REFERENCE_DATE  the day the forecast starts from, YYYY-MM-DD (default: today). The newest
-#                   GEFS run may not be complete yet; the latest complete one is used, and
-#                   the file is named for its date.
+#   REFERENCE_DATE  the day the forecast starts from, YYYY-MM-DD (default: today, UTC). The
+#                   weather is the GEFS run of the day before; the file is named for this date.
+#   FORCE           set to 1 to replace a file that already exists (it is kept by default)
 #   TARGETS_URL     where to read the challenge's targets (default: the published file)
 #   SITES_URL       the challenge's site list, with each lake's latitude and longitude
 #   PYTHON          the Python to run (default: python3)
@@ -48,9 +56,16 @@ library(dplyr)
 project_id <- "templatecast"          # the challenge's project_id
 theme <- "lakes"                      # prefix of the file name, from the challenge
 model_id <- "example_lake_model"      # must match challenge-model.yaml
-horizon <- 30                         # days ahead
+horizon <- 30                         # days ahead of the reference date (yesterday's run reaches 34)
 
-requested_date <- as.Date(Sys.getenv("REFERENCE_DATE", format(Sys.Date())))
+# The forecast is dated today (UTC) and uses yesterday's weather run, so it has no delay.
+reference_date <- as.Date(Sys.getenv("REFERENCE_DATE", format(Sys.time(), "%Y-%m-%d", tz = "UTC")))
+init_date <- reference_date - 1       # the GEFS run the forecast uses
+file <- file.path("forecasts", paste0(theme, "-", reference_date, "-", model_id, ".csv.gz"))
+if (file.exists(file) && Sys.getenv("FORCE") != "1") {
+  message(file, " exists already; not making it again (FORCE=1 replaces it).")
+  quit(save = "no", status = 0)
+}
 train_days <- as.integer(Sys.getenv("TRAIN_DAYS", "365"))
 python <- Sys.getenv("PYTHON", "python3")
 # The weather variables to download and regress on: any names `gefs_weather.py list` prints.
@@ -101,7 +116,7 @@ read_targets <- function(url) {
 # Targets: the observed water temperature -----------------------------------------
 targets <- read_targets(targets_url) |>
   filter(variable == "temperature", !is.na(observation),
-         as.Date(datetime) <= requested_date) |>
+         as.Date(datetime) <= reference_date) |>
   mutate(date = as.Date(datetime)) |>
   select(site_id, date, water_temperature = observation)
 last_observed <- max(targets$date)
@@ -118,6 +133,11 @@ gefs <- function(mode, ...) {
   out <- tempfile(fileext = ".csv")
   status <- system2(python, c("gefs_weather.py", mode, sites_file, out, ...,
                               "--variables", weather_variables))
+  # 75: the run asked for is not complete in the dataset yet (see gefs_weather.py).
+  if (identical(as.integer(status), 75L)) {
+    message("No forecast for ", reference_date, " was made; a later run will try again.")
+    quit(save = "no", status = 0)
+  }
   if (status != 0 || !file.exists(out)) {
     stop("gefs_weather.py failed. Is Python set up? Try: pip install -r requirements.txt",
          call. = FALSE)
@@ -127,10 +147,13 @@ gefs <- function(mode, ...) {
 
 # The weather each lake had over the past year (the regression's input), from the GEFS analysis ...
 air_history <- gefs("history", "--date", format(last_observed), "--days", train_days)
-# ... and the weather GEFS forecasts: one value per variable, ensemble member and day.
-air_forecast <- gefs("forecast", "--date", format(requested_date), "--horizon", horizon)
-reference_date <- as.Date(air_forecast$init_date[1])   # the GEFS run the forecast starts from
-message("Forecast from the GEFS run of ", reference_date, ": ",
+# ... and the weather yesterday's GEFS run forecasts: one value per variable, ensemble member
+# and day. Only that run is used (--max-back 0). It reaches horizon + 1 days after itself, the
+# first of which is today, the reference date, so that day is dropped.
+air_forecast <- gefs("forecast", "--date", format(init_date), "--horizon", horizon + 1,
+                     "--max-back", 0) |>
+  filter(as.Date(date) > reference_date)
+message("Forecast for ", reference_date, " from the GEFS run of ", init_date, ": ",
         n_distinct(air_forecast$ensemble_member), " members, ",
         n_distinct(air_forecast$date), " days")
 
@@ -181,6 +204,5 @@ forecast <- forecast |>
 # Write the file ----------------------------------------------------------------
 # <theme>-<reference date>-<model_id>.csv.gz, in the folder challenge-model.yaml names.
 dir.create("forecasts", showWarnings = FALSE)
-file <- file.path("forecasts", paste0(theme, "-", reference_date, "-", model_id, ".csv.gz"))
 write_csv(forecast, file)
 message("Wrote ", file, " (", nrow(forecast), " rows)")

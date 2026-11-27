@@ -21,7 +21,7 @@ and no key to hand over: a submission is a file you push.
 | `challenge_s3.py` | Reads a CSV from the challenge's S3 storage, with a key if the bucket is private. |
 | `check_forecast.py` | Checks a forecast file before you push it. |
 | `cleanup_forecasts.py` | Deletes forecast files the challenge has already processed. |
-| `.github/workflows/` | Optional automation: make a forecast daily (`forecast.yml` or `forecast-python.yml`) and clean up (`cleanup-forecasts.yml`). Schedules are off (when on, `forecast.yml` runs twice a day at 05:47 and 13:47 UTC, so a late or dropped run still meets the date deadline in README.md). |
+| `.github/workflows/` | Optional automation: make a forecast daily (`forecast.yml` or `forecast-python.yml`) and clean up (`cleanup-forecasts.yml`). Schedules are off (when on, `forecast.yml` runs at 07:47 and 11:47 UTC, an hour after the weather dataset's daily 06:45 update and again as a backup, so a late or dropped run still meets the date deadline in README.md). |
 
 ## Commands
 
@@ -124,9 +124,10 @@ If this summary and the challenge's "How to forecast" page disagree, the page is
 
 ## Known traps
 
-- **The newest GEFS run may be incomplete** for a few hours after 00 UTC. The script uses the
-  latest complete run, and names the file for that run's date, which can be a day before
-  today. That is correct.
+- **The forecast is dated today and uses yesterday's GEFS run** (no delay), 30 days ahead. If
+  that run is not complete yet the script makes no file and exits with status 0; a later run
+  makes it. That is correct, not a failure. A file that exists is never overwritten (`FORCE=1`
+  does), because the challenge ignores changes to a file it has read.
 - **Observations arrive weeks late** (the targets end about three weeks before today), so the
   training window ends at the last observation, not at the reference date.
 - **GEFS has 31 members, numbered 0 to 30.** The member number is the `parameter` of an

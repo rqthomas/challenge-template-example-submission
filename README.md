@@ -38,7 +38,9 @@ forecast, so the forecast is an **ensemble** of 31 members:
      best estimate of past weather, one 3-hourly time series since 2000;
    - each member's forecast of the weather to come, from the
      [**NOAA GEFS forecast, 35 day**](https://dynamical.org/catalog/noaa-gefs-forecast-35-day/):
-     31 members (a control and 30 perturbed), run every day at 00 UTC out to 35 days.
+     31 members (a control and 30 perturbed), run every day at 00 UTC out to 35 days. The
+     example uses **yesterday's** run, the newest that is complete, so its forecast is dated
+     today and has no delay.
 
    Both are the same model, so a relationship fitted to the analysis carries over to the forecast.
 2. **Fit.** At each lake, `lm(water temperature ~ air temperature)` over the past year.
@@ -53,8 +55,12 @@ Rscript forecast.R                  # R: readr and dplyr
 python forecast.py                  # or the same model in Python only
 ```
 
-It writes `forecasts/lakes-<GEFS run date>-example_lake_model.csv.gz`. The file in this
-repository is for the 2026-11-19 run. The model is a simple one on purpose: replace the
+It writes `forecasts/lakes-<today, UTC>-example_lake_model.csv.gz`: dated today, made from
+yesterday's GEFS run. GEFS runs 35 days, so yesterday's run reaches 34 days after today, enough
+for the 30-day forecast (the one day it shares with today is dropped). If yesterday's run is not complete yet (the
+dataset's daily update, at about 06:45 UTC, has not happened) it makes no file and stops quietly, and a later run makes it; a
+file that already exists is never replaced (`FORCE=1` does), because the challenge ignores
+changes to a file it has read. The model is a simple one on purpose: replace the
 "Forecast" section of `forecast.R` with your own (other GEFS variables, a better regression, a
 process model) and keep the rest.
 
@@ -63,7 +69,7 @@ process model) and keep the rest.
 `forecast.py` is the same model written in Python, for people who do not use R. It uses
 `gefs_weather.py` directly (`import gefs_weather`), fits the regressions with NumPy, and
 writes the same file, with the same environment variables (`REFERENCE_DATE`, `TARGETS_URL`,
-`SITES_URL`, `TRAIN_DAYS`, `WEATHER_VARIABLES`, `S3_KEY` and `S3_SECRET`). With a private
+`SITES_URL`, `TRAIN_DAYS`, `WEATHER_VARIABLES`, `FORCE`, `S3_KEY` and `S3_SECRET`). With a private
 bucket it reads the targets through `boto3` with the key, so it needs no extra program. The
 two versions give the same regressions; the 31 members differ only in their random draws.
 They write the same file name, so use one of them for a given model. To run the Python one
@@ -132,8 +138,9 @@ In the forecast, `init_time` is the day of the run, `ensemble_member` runs 0-30,
 3-hourly on the same grid; a year at one lake takes a second or two. The dataset also has other
 variables (wind, humidity, radiation, precipitation, ...): print `ds` to see them. R
 has no Icechunk reader, so `forecast.R` calls the small Python script and reads the CSV it
-writes. The newest run takes a few hours to be added after 00 UTC; the script uses the latest
-complete one and the file is named for it.
+writes. The dataset is updated once a day, at about 06:45 UTC: that update completes
+yesterday's run (and adds the first part of today's). The example uses yesterday's run, so run
+it after about 07:00 UTC; before that the run is not complete and the script makes no file.
 
 Weather data: NOAA NWS NCEP GEFS (forecast and analysis), processed by dynamical.org
 ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)).
@@ -239,7 +246,7 @@ For a private bucket, set `S3_KEY` and `S3_SECRET` (a read-only key) first. A st
 the repository (see *Cleaning up forecasts the challenge already has*).
 
 To make forecasts on a schedule from your own machine, run the same commands from `cron`
-(or any scheduler), for example twice a day at 05:47 and 13:47 (see *Timing and the deadline*):
+(or any scheduler), for example at 07:47 UTC and again at 11:47 (see *Timing and the deadline*):
 
 ```sh
 0 18 * * *  cd /path/to/this-repository && git pull --rebase && python forecast.py && git add forecasts && git commit -m "Forecast" && git push
@@ -335,12 +342,15 @@ D + `settle_days` (its *Participate* page gives the number; the template challen
 commit it by the **end of day D + `settle_days` − 1 (UTC)**. A later forecast is still read and
 scored; it just is not the one on those views.
 
-This example's forecast starts from the latest weather run, which is 1 to 2 days behind, so its
-reference date is a day or two before the day it is made. That is why the template challenge waits
-3 days. If you run it yourself, schedule it **twice a day, at minutes that are not 0** (the
-workflow does: 05:47 and 13:47 UTC): a run that starts hours late still commits before midnight,
-and the second covers a run GitHub dropped. A repeat is harmless, since the same forecast writes the
-same file and nothing is committed when it has not changed.
+This example has no delay of its own: its forecast is dated the day it is made and uses
+yesterday's weather run. What can hold it up is that run: the dataset is updated once a day, at
+about 06:45 UTC (06:39 to 06:47 over a week of checks), and that update completes yesterday's run.
+Until then the script makes nothing and ends quietly. So schedule it **after that update, at a
+minute that is not 0, twice a day** (the workflow does: 07:47 and 11:47 UTC). GitHub starts a
+run late, never early, so the first is never too early; a run that starts hours late still commits
+the same day, and the second covers a run GitHub dropped or an update that was late. A repeat is harmless: a file that exists is never
+replaced, and nothing is committed when nothing changed. A forecast made on a day the run was never
+ready in time is simply missing that day.
 
 ## Making a forecast every day
 

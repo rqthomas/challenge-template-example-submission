@@ -29,6 +29,9 @@ Usage (every mode writes a CSV; --variables takes any of the names `list` prints
         --variables temperature_2m relative_humidity_2m
       The ensemble forecast, one row per member and day for the days after the run.
       Columns: site_id, init_date, ensemble_member, date, then one column per variable.
+      If the run of --date is not complete yet, an earlier one is used (up to --max-back days
+      before, default 3); with --max-back 0 only that run is used, and the command exits with
+      status 75 ("try again later") when it is not complete.
 
 SITES is a CSV with site_id, latitude and longitude columns.
 
@@ -54,6 +57,7 @@ import icechunk
 
 STAC_CATALOG = "https://stac.dynamical.org/catalog.json"
 FORECAST = "noaa-gefs-forecast-35-day"   # init_time x ensemble_member x lead_time x lat x lon
+NOT_READY = 75   # exit status of the command line when the run asked for is not complete
 ANALYSIS = "noaa-gefs-analysis"          # time x lat x lon, 3-hourly
 STATS = ("mean", "min", "max", "sum")
 STEPS_PER_DAY_ANALYSIS = 8               # 3-hourly
@@ -121,17 +125,26 @@ def history(sites, end, days, parsed_specs):
     return pd.concat(rows, ignore_index=True)
 
 
-def forecast(sites, init_date, horizon, parsed_specs):
+class RunNotReady(Exception):
+    """The GEFS run asked for is not complete in the dataset yet."""
+
+
+def forecast(sites, init_date, horizon, parsed_specs, max_back=3):
     """Daily weather for each ensemble member, for `horizon` days after the run.
 
-    The newest run is still being added to the dataset for a few hours after 00 UTC, so
-    a run that is not complete yet is skipped for the one before it.
+    The dataset is updated once a day, at about 06:45 UTC. That update adds the first part of
+    the same day's run (about 13 days) and completes the run of the day before, so a run
+    is complete from about 06:45 UTC the next day. It is complete only when its last lead
+    time has data. With the default `max_back` a run that is not
+    complete is skipped for the one before it, up to `max_back` days earlier. With
+    `max_back=0` only the run of `init_date` is used, and RunNotReady is raised if it is
+    not complete (the caller can try again later).
     """
     ds = open_dataset(FORECAST)
     parsed = parse_variables(parsed_specs, ds)
     names = sorted({name for _, name, _ in parsed})
     first = sites.iloc[0]
-    for back in range(4):
+    for back in range(max_back + 1):
         init = init_date - pd.Timedelta(days=back)
         if init not in ds["init_time"].values:
             continue
@@ -139,7 +152,9 @@ def forecast(sites, init_date, horizon, parsed_specs):
         if not np.isnan(last_step.load()).any():
             break
     else:
-        sys.exit(f"No complete GEFS run found on or before {init_date.date()}.")
+        if max_back == 0:
+            raise RunNotReady(f"The GEFS run of {init_date.date()} is not complete yet.")
+        raise RunNotReady(f"No complete GEFS run found on or before {init_date.date()}.")
     print(f"Using the GEFS run initialized {init} ({back} day(s) before {init_date.date()})",
           file=sys.stderr)
 
@@ -176,6 +191,9 @@ def main():
     parser.add_argument("--date", help="last day (history) or run date (forecast), YYYY-MM-DD")
     parser.add_argument("--days", type=int, default=365, help="history: how many days back")
     parser.add_argument("--horizon", type=int, default=30, help="forecast: days ahead")
+    parser.add_argument("--max-back", type=int, default=3,
+                        help="forecast: use an earlier run, up to this many days before --date, "
+                             "if the run of --date is not complete (0: only that run)")
     parser.add_argument("--variables", nargs="+", default=["temperature_2m"],
                         help="variable names from `list`, optionally with :mean/:min/:max/:sum")
     args = parser.parse_args()
@@ -189,7 +207,12 @@ def main():
     if args.mode == "history":
         result = history(sites, date, args.days, args.variables)
     else:
-        result = forecast(sites, date, args.horizon, args.variables)
+        try:
+            result = forecast(sites, date, args.horizon, args.variables, args.max_back)
+        except RunNotReady as error:
+            # 75 is "temporary failure, try again later" (sysexits.h); forecast.R looks for it.
+            print(error, file=sys.stderr)
+            sys.exit(NOT_READY)
     result.to_csv(args.out, index=False)
     print(f"Wrote {len(result)} rows to {args.out}", file=sys.stderr)
 

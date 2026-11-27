@@ -9,8 +9,8 @@ name: forecast-python
 
 on:
   # schedule:
-  #   - cron: '47 5 * * *'
-  #   - cron: '47 13 * * *'   # two runs a day, off the hour: see forecast.yml for why
+  #   - cron: '47 7 * * *'
+  #   - cron: '47 11 * * *'   # timed by when the weather is ready, off the hour: see forecast.yml
   workflow_dispatch:
 
 # One job at a time changes forecasts/, so a new forecast's commit never races the
@@ -52,5 +52,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add forecasts/
-          git diff --cached --quiet || git commit -m "Forecast for $(date -u +%F)"
+          # Named for the reference date in the file's name, not the day the job ran.
+          if ! git diff --cached --quiet; then
+            ref=$(git diff --cached --name-only | sed -E 's#.*/[^/-]+-([0-9]{4}-[0-9]{2}-[0-9]{2})-.*#\1#' | sort | tail -1)
+            git commit -m "Forecast for $ref"
+          fi
           git push

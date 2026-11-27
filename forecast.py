@@ -11,14 +11,23 @@ ensemble from dynamical.org.
      dynamical.org (https://dynamical.org), whose datasets anyone can read over HTTPS with
      no account. For the weather the lakes had it uses the "NOAA GEFS analysis" (the model's
      best estimate of past weather, 3-hourly since 2000); for the weather to come, the 31
-     ensemble members of the latest "NOAA GEFS forecast, 35 day" run. Both are the same
-     GEFS model, so a relationship fitted to one carries over to the other.
+     ensemble members of the "NOAA GEFS forecast, 35 day" run of the day before. Both are
+     the same GEFS model, so a relationship fitted to one carries over to the other.
   2. Fit. At each lake, a linear regression of the observed water temperature on that
      weather (water ~ air temperature) over the past year.
   3. Forecast. Each GEFS member's weather goes through the regression, plus a random draw
      from the regression's residuals, to make one member of the water temperature forecast.
      The 31 members are submitted as an ensemble: the weather uncertainty comes from GEFS and
      the model's own uncertainty from the residuals.
+
+No delay. The forecast is dated today (UTC) and uses yesterday's GEFS run, the newest one
+that is complete by the time a run of this script happens, so it can be submitted the day it
+is made. GEFS runs 35 days, so yesterday's run reaches 34 days after today, more than the 30 the
+forecast needs; the day it shares with today is dropped. If yesterday's run is not complete yet
+(the dataset is updated once a day, at about 06:45 UTC, and that update completes yesterday's
+run, so run this after about 07:00 UTC) no file is made and the script exits quietly; a later run makes it.
+A file that already exists is never overwritten, because the challenge ignores changes to a
+file it has read.
 
 Replace the "Forecast" section with your own model; keep the rest, which reads the targets
 and the weather and writes the file in the format the challenge expects.
@@ -27,9 +36,9 @@ Run from the repository root:  python forecast.py
 Needs the packages in requirements.txt (pip install -r requirements.txt).
 
 Environment variables (all optional)
-  REFERENCE_DATE  the day the forecast starts from, YYYY-MM-DD (default: today). The newest
-                  GEFS run may not be complete yet; the latest complete one is used, and the
-                  file is named for its date.
+  REFERENCE_DATE  the day the forecast starts from, YYYY-MM-DD (default: today, UTC). The
+                  weather is the GEFS run of the day before, and the file is named for this date.
+  FORCE           set to 1 to replace a file that already exists (it is kept by default)
   TARGETS_URL     where to read the challenge's targets (default: the published file)
   SITES_URL       the challenge's site list, with each lake's latitude and longitude
   TRAIN_DAYS      days of history for the regression (default: 365)
@@ -54,9 +63,16 @@ from challenge_s3 import read_csv
 PROJECT_ID = "templatecast"          # the challenge's project_id
 THEME = "lakes"                      # prefix of the file name, from the challenge
 MODEL_ID = "example_lake_model"      # must match challenge-model.yaml
-HORIZON = 30                         # days ahead
+HORIZON = 30                         # days ahead of the reference date (yesterday's run reaches 34)
 
-requested_date = pd.Timestamp(os.environ.get("REFERENCE_DATE") or pd.Timestamp.now().date())
+# The forecast is dated today (UTC) and uses yesterday's weather run, so it has no delay.
+reference_date = pd.Timestamp(os.environ.get("REFERENCE_DATE")
+                              or pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d"))
+init_date = reference_date - pd.Timedelta(days=1)       # the GEFS run the forecast uses
+file = Path("forecasts") / f"{THEME}-{reference_date.date()}-{MODEL_ID}.csv.gz"
+if file.exists() and os.environ.get("FORCE") != "1":
+    print(f"{file} exists already; not making it again (FORCE=1 replaces it).")
+    sys.exit(0)
 train_days = int(os.environ.get("TRAIN_DAYS", "365"))
 targets_url = os.environ.get("TARGETS_URL") or (
     "https://s3.us-east-005.backblazeb2.com/template-challenge/targets/"
@@ -75,7 +91,7 @@ weather_columns = [v.replace(":", "_") for v in weather_variables]
 targets = read_csv(targets_url)   # by URL, or with S3_KEY / S3_SECRET for a private bucket
 targets = targets[(targets["variable"] == "temperature") & targets["observation"].notna()].copy()
 targets["date"] = pd.to_datetime(targets["datetime"], utc=True).dt.tz_localize(None).dt.normalize()
-targets = targets[targets["date"] <= requested_date]
+targets = targets[targets["date"] <= reference_date]
 targets = targets[["site_id", "date", "observation"]].rename(
     columns={"observation": "water_temperature"})
 last_observed = targets["date"].max()
@@ -90,11 +106,17 @@ sites = pd.read_csv(sites_url)[["site_id", "latitude", "longitude"]]
 # analysis ...
 air_history = gefs.history(sites, last_observed, train_days, weather_variables)
 air_history["date"] = pd.to_datetime(air_history["date"])
-# ... and the weather GEFS forecasts: one value per variable, ensemble member and day.
-air_forecast = gefs.forecast(sites, requested_date, HORIZON, weather_variables)
+# ... and the weather yesterday's GEFS run forecasts: one value per variable, ensemble member
+# and day. Only that run is used (max_back=0). It reaches HORIZON + 1 days after itself, the
+# first of which is today, the reference date, so that day is dropped below.
+try:
+    air_forecast = gefs.forecast(sites, init_date, HORIZON + 1, weather_variables, max_back=0)
+except gefs.RunNotReady as error:
+    print(f"{error} No forecast for {reference_date.date()} was made; a later run will try again.")
+    sys.exit(0)
 air_forecast["date"] = pd.to_datetime(air_forecast["date"])
-reference_date = pd.Timestamp(air_forecast["init_date"].iloc[0])  # the GEFS run it starts from
-print(f"Forecast from the GEFS run of {reference_date.date()}: "
+air_forecast = air_forecast[air_forecast["date"] > reference_date]   # strictly after the reference
+print(f"Forecast for {reference_date.date()} from the GEFS run of {init_date.date()}: "
       f"{air_forecast['ensemble_member'].nunique()} members, {air_forecast['date'].nunique()} days")
 
 # Forecast ----------------------------------------------------------------------
@@ -146,6 +168,5 @@ forecast = pd.DataFrame({
 # Write the file ----------------------------------------------------------------
 # <theme>-<reference date>-<model_id>.csv.gz, in the folder challenge-model.yaml names.
 Path("forecasts").mkdir(exist_ok=True)
-file = Path("forecasts") / f"{THEME}-{reference_date.date()}-{MODEL_ID}.csv.gz"
 forecast.to_csv(file, index=False)                 # the .gz extension makes it gzip
 print(f"Wrote {file} ({len(forecast)} rows)", file=sys.stderr)

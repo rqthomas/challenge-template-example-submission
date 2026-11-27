@@ -5,15 +5,18 @@
 # challenge (see README.md), and the challenge's targets are published.
 name: forecast
 
-# Two runs a day, at minutes that are not 0. GitHub's free scheduler starts a run hours late
-# (4 to 12 hours is common) and sometimes drops it, and the challenge's deadline for a forecast
-# is a date (see "Timing" in README.md): a late run must still commit before midnight UTC, and the
-# second run covers a dropped one. A repeat is harmless: the same forecast writes the same file,
-# and nothing is committed when it has not changed.
+# Timed by when the weather is ready. The forecast uses yesterday's GEFS run, and the
+# dynamical.org dataset is updated once a day, at about 06:40 to 06:47 UTC (measured over a week:
+# 06:39 to 06:47), which is the update that completes yesterday's run. So the first run is at 07:47
+# UTC, an hour after it; GitHub only ever starts a run late, so it is never too early. The second
+# run, at 11:47, covers a run GitHub drops (it sometimes does) and a late dataset update. Both are
+# at minutes that are not 0, since GitHub says the start of every hour is busy. A repeat is
+# harmless: a file that exists is not made again, and the challenge's deadline for a forecast is a
+# date (see "Timing" in README.md), so a run that starts hours late still commits the same day.
 on:
   schedule:
-    - cron: '47 5 * * *'
-    - cron: '47 13 * * *'
+    - cron: '47 7 * * *'
+    - cron: '47 11 * * *'
   workflow_dispatch:
 
 # One job at a time changes forecasts/, so a new forecast's commit never races the
@@ -66,5 +69,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add forecasts/
-          git diff --cached --quiet || git commit -m "Forecast for $(date -u +%F)"
+          # Named for the reference date in the file's name, not the day the job ran.
+          if ! git diff --cached --quiet; then
+            ref=$(git diff --cached --name-only | sed -E 's#.*/[^/-]+-([0-9]{4}-[0-9]{2}-[0-9]{2})-.*#\1#' | sort | tail -1)
+            git commit -m "Forecast for $ref"
+          fi
           git push
